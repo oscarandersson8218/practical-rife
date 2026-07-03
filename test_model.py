@@ -5,6 +5,7 @@ import cv2
 import torch
 
 from train_log.RIFE_HDv3 import Model
+from train_log.RIFE_HDv3_ref import ModelRef
 
 
 DEFAULT_PAIRS = (
@@ -35,6 +36,19 @@ def write_image(path, tensor):
     cv2.imwrite(str(path), image)
 
 
+def assert_outputs_close(name, actual, expected, rtol, atol):
+    if torch.allclose(actual, expected, rtol=rtol, atol=atol):
+        return
+
+    diff = (actual - expected).abs()
+    max_diff = diff.max().item()
+    mean_diff = diff.mean().item()
+    raise AssertionError(
+        f"{name}: Model output does not match ModelRef "
+        f"(max_diff={max_diff:.8f}, mean_diff={mean_diff:.8f}, rtol={rtol}, atol={atol})"
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Export RIFE and run midpoint inference on demo image pairs."
@@ -44,6 +58,14 @@ def parse_args():
     parser.add_argument("--output", type=Path, default=Path("output/test_model"))
     parser.add_argument("--width", type=int, default=384)
     parser.add_argument("--height", type=int, default=768)
+    parser.add_argument("--rtol", type=float, default=1e-4)
+    parser.add_argument("--atol", type=float, default=1e-4)
+    parser.add_argument(
+        "--load-rank",
+        type=int,
+        default=-1,
+        help="rank argument passed to load_model; -1 strips DDP 'module.' prefixes",
+    )
     return parser.parse_args()
 
 
@@ -51,9 +73,24 @@ def main():
     args = parse_args()
     device = "cpu"
     model = Model()
-    model.load_model(args.model)
+    model.load_model(args.model, args.load_rank)
     model.eval()
     model.to(device)
+
+    model_ref = ModelRef()
+    model_ref.load_model(args.model, args.load_rank)
+    model_ref.eval()
+    model_ref.to(device)
+
+    pairs = []
+    for name, img0_path, img1_path in DEFAULT_PAIRS:
+        img0 = read_image(img0_path, args.width, args.height, device)
+        img1 = read_image(img1_path, args.width, args.height, device)
+        with torch.no_grad():
+            middle = model(img0, img1)
+            middle_ref = model_ref(img0, img1)
+        assert_outputs_close(name, middle, middle_ref, args.rtol, args.atol)
+        pairs.append((name, img0, img1, middle))
 
     example_inputs = model.example_inputs(args.width, args.height)
     with torch.no_grad():
@@ -63,16 +100,18 @@ def main():
     graph_module = exported_program.module()
 
     outputs = []
-    for name, img0_path, img1_path in DEFAULT_PAIRS:
-        img0 = read_image(img0_path, args.width, args.height, device)
-        img1 = read_image(img1_path, args.width, args.height, device)
+    for name, img0, img1, middle in pairs:
         with torch.no_grad():
-            middle = graph_module(img0, img1)
+            middle_exported = graph_module(img0, img1)
+        assert_outputs_close(
+            f"{name} export", middle_exported, middle, args.rtol, args.atol
+        )
         output_path = args.output / f"{name}_middle.png"
-        write_image(output_path, middle)
+        write_image(output_path, middle_exported)
         outputs.append(output_path)
 
     print(f"Exported: {args.export}")
+    print(f"Model and ModelRef outputs match within rtol={args.rtol}, atol={args.atol}")
     for output in outputs:
         print(f"Wrote: {output}")
 

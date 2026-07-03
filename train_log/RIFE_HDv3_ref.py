@@ -5,13 +5,17 @@ from torch.optim import AdamW
 import torch.optim as optim
 import itertools
 from torch.nn.parallel import DistributedDataParallel as DDP
-from train_log.IFNet_HDv3 import *
+from train_log.IFNet_HDv3_ref import *
 import torch.nn.functional as F
 from model.loss import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+backwarp_tenGrid = {}
+
+
+
     
-class Model(torch.nn.Module):
+class ModelRef(torch.nn.Module):
     def __init__(self, local_rank=-1):
         super().__init__()
         self.flownet = IFNet()
