@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from model.loss import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
 class Model(torch.nn.Module):
     def __init__(self, local_rank=-1):
         super().__init__()
@@ -60,7 +60,7 @@ class Model(torch.nn.Module):
                 self.flownet.load_state_dict(convert(torch.load('{}/flownet.pkl'.format(path))), False)
             else:
                 self.flownet.load_state_dict(convert(torch.load('{}/flownet.pkl'.format(path), map_location ='cpu')), False)
-        
+
     def save_model(self, path, rank=0):
         if rank == 0:
             torch.save(self.flownet.state_dict(),'{}/flownet.pkl'.format(path))
@@ -70,7 +70,7 @@ class Model(torch.nn.Module):
         scale_list = [16/scale, 8/scale, 4/scale, 2/scale, 1/scale]
         flow, mask, merged = self.flownet(imgs, timestep, scale_list)
         return merged[-1]
-    
+
     def update(self, imgs, gt, learning_rate=0, mul=1, training=True, flow_gt=None):
         for param_group in self.optimG.param_groups:
             param_group['lr'] = learning_rate
