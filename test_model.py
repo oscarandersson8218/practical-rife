@@ -7,7 +7,6 @@ import torch
 from train_log.RIFE_HDv3 import Model
 from train_log.RIFE_HDv3_ref import ModelRef
 
-
 DEFAULT_PAIRS = (
     ("I0", "demo/I0_0.png", "demo/I0_1.png"),
     ("i", "demo/i0.png", "demo/i1.png"),
@@ -66,6 +65,11 @@ def parse_args():
         default=-1,
         help="rank argument passed to load_model; -1 strips DDP 'module.' prefixes",
     )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="open the exported program in ExecuTorch's model visualizer",
+    )
     return parser.parse_args()
 
 
@@ -95,6 +99,10 @@ def main():
     example_inputs = model.example_inputs(args.width, args.height)
     with torch.no_grad():
         exported_program = torch.export.export(model, example_inputs)
+    if args.visualize:
+        from executorch.devtools.visualization import visualize
+        visualize(exported_program)
+
     args.export.parent.mkdir(parents=True, exist_ok=True)
     torch.export.save(exported_program, args.export)
     graph_module = exported_program.module()
