@@ -61,13 +61,52 @@ class Head(nn.Module):
 class ResConv(nn.Module):
     def __init__(self, c, dilation=1):
         super(ResConv, self).__init__()
-        self.conv = nn.Conv2d(c, c, 3, 1, dilation, dilation=dilation, groups=1\
-)
-        self.beta = nn.Parameter(torch.ones((1, c, 1, 1)), requires_grad=True)
+        self.conv = nn.Conv2d(c, c, 3, 1, dilation, dilation=dilation, groups=1)
         self.relu = nn.LeakyReLU(0.2, True)
+        with torch.no_grad():
+            self._add_residual_identity_(self.conv.weight)
+
+    @staticmethod
+    def _add_residual_identity_(weight):
+        channels = weight.shape[0]
+        center_h = weight.shape[2] // 2
+        center_w = weight.shape[3] // 2
+        channel_idx = torch.arange(channels, device=weight.device)
+        weight[channel_idx, channel_idx, center_h, center_w] += 1.0
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        beta_key = prefix + "beta"
+        weight_key = prefix + "conv.weight"
+        bias_key = prefix + "conv.bias"
+        if beta_key in state_dict and weight_key in state_dict:
+            beta = state_dict.pop(beta_key).reshape(-1)
+            fused_weight = state_dict[weight_key].clone()
+            fused_weight *= beta.reshape(-1, 1, 1, 1)
+            self._add_residual_identity_(fused_weight)
+            state_dict[weight_key] = fused_weight
+            if bias_key in state_dict:
+                state_dict[bias_key] = state_dict[bias_key].clone() * beta
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(self, x):
-        return self.relu(self.conv(x) * self.beta + x)
+        return self.relu(self.conv(x))
 
 class IFBlock(nn.Module):
     def __init__(self, in_planes, c=64):
