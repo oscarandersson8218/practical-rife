@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from train_log.IFNet_helpers import (
     TimestepFold,
+    fold_scale_state_dict,
     fold_timestep_state_dict,
     prune_lastconv_state_dict,
 )
@@ -114,6 +115,8 @@ class ResConv(nn.Module):
         return self.relu(self.conv(x))
 
 class IFBlock(nn.Module):
+    _version = 2
+
     timestep_fold = TimestepFold.TIMESTEP_CONCAT
     fixed_timestep = 0.5
 
@@ -124,9 +127,12 @@ class IFBlock(nn.Module):
         timestep_insert_channel=14,
         scale=1,
         output_feat=True,
+        input_flow_channels=0,
     ):
         super(IFBlock, self).__init__()
         self.output_feat = output_feat
+        self.scale = scale
+        self.input_flow_channels = input_flow_channels
         self.timestep_insert_channel = timestep_insert_channel
         self._timestep_scale = scale
         self._timestep_input_height = 768
@@ -172,6 +178,9 @@ class IFBlock(nn.Module):
             fold_timestep_state_dict(self, state_dict, prefix, weight_key)
         if not self.output_feat:
             prune_lastconv_state_dict(self, state_dict, prefix)
+        version = local_metadata.get("version")
+        if version is None or version < self._version:
+            fold_scale_state_dict(self, state_dict, prefix)
         super()._load_from_state_dict(
             state_dict,
             prefix,
@@ -182,7 +191,8 @@ class IFBlock(nn.Module):
             error_msgs,
         )
 
-    def forward(self, x, flow=None, scale=1):
+    def forward(self, x):
+        scale = self.scale
         x = F.interpolate(x, scale_factor= 1. / scale, mode="bilinear", align_corners=False)
         if self.timestep_fold == TimestepFold.TIMESTEP_CONCAT:
             timestep = x.new_full(
@@ -190,9 +200,6 @@ class IFBlock(nn.Module):
             )
             insert_channel = self.timestep_insert_channel
             x = torch.cat((x[:, :insert_channel], timestep, x[:, insert_channel:]), 1)
-        if flow is not None:
-            flow = F.interpolate(flow, scale_factor= 1. / scale, mode="bilinear", align_corners=False) * 1. / scale
-            x = torch.cat((x, flow), 1)
         if self.timestep_fold == TimestepFold.TIMESTEP_ADD:
             feat = self.conv0[0][0](x) + self.conv0_timestep_bias
             feat = self.conv0[0][1](feat)
@@ -202,7 +209,7 @@ class IFBlock(nn.Module):
         feat = self.convblock(feat)
         tmp = self.lastconv(feat)
         tmp = F.interpolate(tmp, scale_factor=scale, mode="bilinear", align_corners=False)
-        flow = tmp[:, :4] * scale
+        flow = tmp[:, :4]
         mask = tmp[:, 4:5]
         feat = tmp[:, 5:]
         return flow, mask, feat
@@ -211,10 +218,10 @@ class IFNet(nn.Module):
     def __init__(self):
         super(IFNet, self).__init__()
         self.block0 = IFBlock(7+8, c=192, scale=16)
-        self.block1 = IFBlock(8+4+8+8, c=128, scale=8)
-        self.block2 = IFBlock(8+4+8+8, c=96, scale=4)
-        self.block3 = IFBlock(8+4+8+8, c=64, scale=2)
-        self.block4 = IFBlock(8+4+8+8, c=32, scale=1, output_feat=False)
+        self.block1 = IFBlock(8+4+8+8, c=128, scale=8, input_flow_channels=4)
+        self.block2 = IFBlock(8+4+8+8, c=96, scale=4, input_flow_channels=4)
+        self.block3 = IFBlock(8+4+8+8, c=64, scale=2, input_flow_channels=4)
+        self.block4 = IFBlock(8+4+8+8, c=32, scale=1, output_feat=False, input_flow_channels=4)
         self.encode = Head()
 
 
@@ -233,7 +240,7 @@ class IFNet(nn.Module):
         mask = None
 
         # --- Block 0 ---
-        flow, mask, feat = self.block0(torch.cat((img0[:, :3], img1[:, :3], f0, f1), 1), None, scale=scale_list[0])
+        flow, mask, feat = self.block0(torch.cat((img0[:, :3], img1[:, :3], f0, f1), 1))
 
         warped_img0 = warp(img0, flow[:, :2])
         warped_img1 = warp(img1, flow[:, 2:4])
@@ -241,7 +248,7 @@ class IFNet(nn.Module):
         wf1 = warp(f1, flow[:, 2:4])
 
         # --- Block 1 ---
-        fd, mask, feat = self.block1(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat), 1), flow, scale=scale_list[1])
+        fd, mask, feat = self.block1(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat, flow), 1))
         flow = flow + fd
         
         warped_img0 = warp(img0, flow[:, :2])
@@ -250,7 +257,7 @@ class IFNet(nn.Module):
         wf1 = warp(f1, flow[:, 2:4])
 
         # --- Block 2 ---
-        fd, mask, feat = self.block2(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat), 1), flow, scale=scale_list[2])
+        fd, mask, feat = self.block2(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat, flow), 1))
         flow = flow + fd
 
         warped_img0 = warp(img0, flow[:, :2])
@@ -259,7 +266,7 @@ class IFNet(nn.Module):
         wf1 = warp(f1, flow[:, 2:4])
 
         # --- Block 3 ---
-        fd, mask, feat = self.block3(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat), 1), flow, scale=scale_list[3])
+        fd, mask, feat = self.block3(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat, flow), 1))
         flow = flow + fd
 
         warped_img0 = warp(img0, flow[:, :2])
@@ -268,7 +275,7 @@ class IFNet(nn.Module):
         wf1 = warp(f1, flow[:, 2:4])
 
         # --- Block 4 ---
-        fd, mask, feat = self.block4(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat), 1), flow, scale=scale_list[4])
+        fd, mask, feat = self.block4(torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, mask, feat, flow), 1))
         flow = flow + fd
         warped_img0 = warp(img0, flow[:, :2])
         warped_img1 = warp(img1, flow[:, 2:4])

@@ -42,6 +42,29 @@ def prune_lastconv_state_dict(block, state_dict, prefix):
             state_dict[bias_key] = state_dict[bias_key][:expected_channels].clone()
 
 
+def fold_scale_state_dict(block, state_dict, prefix):
+    scale = float(block.scale)
+    if scale == 1.0:
+        return
+    if block.input_flow_channels:
+        weight_key = prefix + "conv0.0.0.weight"
+        if weight_key in state_dict:
+            weight = state_dict[weight_key].clone()
+            weight[:, -block.input_flow_channels:] /= scale
+            state_dict[weight_key] = weight
+    weight_key = prefix + "lastconv.0.weight"
+    bias_key = prefix + "lastconv.0.bias"
+    flow_output_channels = 4 * block.lastconv[1].upscale_factor**2
+    if weight_key in state_dict:
+        weight = state_dict[weight_key].clone()
+        weight[:, :flow_output_channels] *= scale
+        state_dict[weight_key] = weight
+    if bias_key in state_dict:
+        bias = state_dict[bias_key].clone()
+        bias[:flow_output_channels] *= scale
+        state_dict[bias_key] = bias
+
+
 def _recover_constant_timestep_weight(timestep_bias, timestep):
     bias = timestep_bias[0] / timestep
     interior = bias[:, 1, 1]
