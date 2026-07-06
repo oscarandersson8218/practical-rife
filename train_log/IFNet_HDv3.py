@@ -5,6 +5,7 @@ from train_log.IFNet_helpers import (
     TimestepFold,
     fold_scale_state_dict,
     fold_timestep_state_dict,
+    fold_warp_normalization_state_dict,
     prune_lastconv_state_dict,
 )
 # from train_log.refine import *
@@ -21,9 +22,6 @@ def warp(tenInput, tenFlow):
             1, 1, tenFlow.shape[2], 1).expand(tenFlow.shape[0], -1, -1, tenFlow.shape[3])
         backwarp_tenGrid[k] = torch.cat(
             [tenHorizontal, tenVertical], 1).to(device)
-
-    tenFlow = torch.cat([tenFlow[:, 0:1, :, :] / ((tenInput.shape[3] - 1.0) / 2.0),
-                         tenFlow[:, 1:2, :, :] / ((tenInput.shape[2] - 1.0) / 2.0)], 1)
 
     g = (backwarp_tenGrid[k] + tenFlow).permute(0, 2, 3, 1)
     return torch.nn.functional.grid_sample(input=tenInput, grid=g, mode='bilinear', padding_mode='border', align_corners=True)
@@ -115,7 +113,7 @@ class ResConv(nn.Module):
         return self.relu(self.conv(x))
 
 class IFBlock(nn.Module):
-    _version = 2
+    _version = 3
 
     timestep_fold = TimestepFold.TIMESTEP_CONCAT
     fixed_timestep = 0.5
@@ -137,6 +135,8 @@ class IFBlock(nn.Module):
         self._timestep_scale = scale
         self._timestep_input_height = 768
         self._timestep_input_width = 384
+        self._flow_input_height = 768
+        self._flow_input_width = 384
         self.conv0 = nn.Sequential(
             conv(in_planes, c//2, 3, 2, 1),
             conv(c//2, c, 3, 2, 1),
@@ -179,8 +179,10 @@ class IFBlock(nn.Module):
         if not self.output_feat:
             prune_lastconv_state_dict(self, state_dict, prefix)
         version = local_metadata.get("version")
-        if version is None or version < self._version:
+        if version is None or version < 2:
             fold_scale_state_dict(self, state_dict, prefix)
+        if version is None or version < self._version:
+            fold_warp_normalization_state_dict(self, state_dict, prefix)
         super()._load_from_state_dict(
             state_dict,
             prefix,

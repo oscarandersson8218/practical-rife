@@ -65,6 +65,41 @@ def fold_scale_state_dict(block, state_dict, prefix):
         state_dict[bias_key] = bias
 
 
+def fold_warp_normalization_state_dict(block, state_dict, prefix):
+    factors = (
+        2.0 / (float(block._flow_input_width) - 1.0),
+        2.0 / (float(block._flow_input_height) - 1.0),
+        2.0 / (float(block._flow_input_width) - 1.0),
+        2.0 / (float(block._flow_input_height) - 1.0),
+    )
+    if block.input_flow_channels:
+        weight_key = prefix + "conv0.0.0.weight"
+        if weight_key in state_dict:
+            weight = state_dict[weight_key].clone()
+            input_factors = weight.new_tensor(factors).reshape(1, -1, 1, 1)
+            weight[:, -block.input_flow_channels:] /= input_factors
+            state_dict[weight_key] = weight
+
+    weight_key = prefix + "lastconv.0.weight"
+    bias_key = prefix + "lastconv.0.bias"
+    upscale_factor = block.lastconv[1].upscale_factor
+    flow_output_channels = 4 * upscale_factor**2
+    if weight_key in state_dict:
+        weight = state_dict[weight_key].clone()
+        output_factors = weight.new_tensor(factors).repeat_interleave(
+            upscale_factor**2
+        )
+        weight[:, :flow_output_channels] *= output_factors.reshape(1, -1, 1, 1)
+        state_dict[weight_key] = weight
+    if bias_key in state_dict:
+        bias = state_dict[bias_key].clone()
+        output_factors = bias.new_tensor(factors).repeat_interleave(
+            upscale_factor**2
+        )
+        bias[:flow_output_channels] *= output_factors
+        state_dict[bias_key] = bias
+
+
 def _recover_constant_timestep_weight(timestep_bias, timestep):
     bias = timestep_bias[0] / timestep
     interior = bias[:, 1, 1]
