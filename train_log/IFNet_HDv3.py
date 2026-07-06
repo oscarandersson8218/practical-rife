@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from train_log.IFNet_helpers import (
     TimestepFold,
     fold_timestep_state_dict,
+    prune_lastconv_state_dict,
 )
 # from train_log.refine import *
 
@@ -122,8 +123,10 @@ class IFBlock(nn.Module):
         c=64,
         timestep_insert_channel=14,
         scale=1,
+        output_feat=True,
     ):
         super(IFBlock, self).__init__()
+        self.output_feat = output_feat
         self.timestep_insert_channel = timestep_insert_channel
         self._timestep_scale = scale
         self._timestep_input_height = 768
@@ -143,7 +146,7 @@ class IFBlock(nn.Module):
             ResConv(c),
         )
         self.lastconv = nn.Sequential(
-            nn.ConvTranspose2d(c, 4*13, 4, 2, 1),
+            nn.ConvTranspose2d(c, 4 * (13 if output_feat else 5), 4, 2, 1),
             nn.PixelShuffle(2)
         )
         if self.timestep_fold == TimestepFold.TIMESTEP_ADD:
@@ -167,6 +170,8 @@ class IFBlock(nn.Module):
         weight_key = prefix + "conv0.0.0.weight"
         if weight_key in state_dict:
             fold_timestep_state_dict(self, state_dict, prefix, weight_key)
+        if not self.output_feat:
+            prune_lastconv_state_dict(self, state_dict, prefix)
         super()._load_from_state_dict(
             state_dict,
             prefix,
@@ -209,7 +214,7 @@ class IFNet(nn.Module):
         self.block1 = IFBlock(8+4+8+8, c=128, scale=8)
         self.block2 = IFBlock(8+4+8+8, c=96, scale=4)
         self.block3 = IFBlock(8+4+8+8, c=64, scale=2)
-        self.block4 = IFBlock(8+4+8+8, c=32, scale=1)
+        self.block4 = IFBlock(8+4+8+8, c=32, scale=1, output_feat=False)
         self.encode = Head()
 
 

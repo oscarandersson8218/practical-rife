@@ -27,6 +27,21 @@ def fold_timestep_state_dict(block, state_dict, prefix, weight_key):
         _fold_timestep_to_concat(block, state_dict, prefix, weight_key)
 
 
+def prune_lastconv_state_dict(block, state_dict, prefix):
+    weight_key = prefix + "lastconv.0.weight"
+    bias_key = prefix + "lastconv.0.bias"
+    if weight_key in state_dict:
+        expected_channels = block.lastconv[0].weight.shape[1]
+        if state_dict[weight_key].shape[1] > expected_channels:
+            state_dict[weight_key] = state_dict[weight_key][
+                :, :expected_channels
+            ].clone()
+    if bias_key in state_dict:
+        expected_channels = block.lastconv[0].bias.shape[0]
+        if state_dict[bias_key].shape[0] > expected_channels:
+            state_dict[bias_key] = state_dict[bias_key][:expected_channels].clone()
+
+
 def _recover_constant_timestep_weight(timestep_bias, timestep):
     bias = timestep_bias[0] / timestep
     interior = bias[:, 1, 1]
