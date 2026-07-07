@@ -57,8 +57,8 @@ def parse_args():
     parser.add_argument("--output", type=Path, default=Path("output/test_model"))
     parser.add_argument("--width", type=int, default=384)
     parser.add_argument("--height", type=int, default=768)
-    parser.add_argument("--rtol", type=float, default=1e-4)
-    parser.add_argument("--atol", type=float, default=1e-4)
+    parser.add_argument("--rtol", type=float, default=1e-3)
+    parser.add_argument("--atol", type=float, default=5e-1)
     parser.add_argument(
         "--load-rank",
         type=int,

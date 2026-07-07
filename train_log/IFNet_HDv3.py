@@ -194,9 +194,17 @@ class IFBlock(nn.Module):
         )
 
     def _interpolate_for_scale(self, x, scale):
-        return F.interpolate(
-            x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False
-        )
+        if scale == 16:
+            x = F.interpolate(
+                x, scale_factor=1.0 / 8.0, mode="bilinear", align_corners=False
+            )
+            return F.interpolate(
+                x, scale_factor=1.0 / 2.0, mode="bilinear", align_corners=False
+            )
+        else:      
+            return F.interpolate(
+                x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False
+            )
 
     def _prepare_input(self, x, scale, native_scale_inputs=(), trailing_inputs=()):
         if not isinstance(x, tuple):
