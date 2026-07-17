@@ -12,8 +12,9 @@ from model.loss import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-class Model:
+class Model(torch.nn.Module):
     def __init__(self, local_rank=-1):
+        super().__init__()
         self.flownet = IFNet()
         self.device()
         self.optimG = AdamW(self.flownet.parameters(), lr=1e-6, weight_decay=1e-4)
@@ -23,6 +24,18 @@ class Model:
         self.sobel = SOBEL()
         if local_rank != -1:
             self.flownet = DDP(self.flownet, device_ids=[local_rank], output_device=local_rank)
+
+    def example_inputs(self, width, height, batch_size = 1):
+        img0 = torch.rand(batch_size, 3, height, width).to(
+            memory_format=torch.channels_last
+        )
+        img1 = torch.rand(batch_size, 3, height, width).to(
+            memory_format=torch.channels_last
+        )
+        return (img0, img1)
+
+    def forward(self, img0, img1):
+        return self.inference(img0, img1)
 
     def train(self):
         self.flownet.train()
