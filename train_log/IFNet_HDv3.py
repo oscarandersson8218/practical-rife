@@ -253,9 +253,8 @@ class IFBlock(nn.Module):
         flow = F.interpolate(
             tmp[:, :4], scale_factor=scale, mode="bilinear", align_corners=False
         )
-        mask_feat = self._resize_output_for_scale(tmp[:, 4:], scale, output_scale)
-        mask = mask_feat[:, :1]
-        feat = mask_feat[:, 1:]
+        mask = self._resize_output_for_scale(tmp[:, 4:5], scale, output_scale)
+        feat = self._resize_output_for_scale(tmp[:, 5:], scale, output_scale)
         return flow, mask, feat
 class IFNet(nn.Module):
     def __init__(self):
@@ -284,7 +283,7 @@ class IFNet(nn.Module):
 
         # --- Block 0 ---
         flow, mask, feat = self.block0(
-            torch.cat((img0[:, :3], img1[:, :3], f0, f1), 1),
+            (img0[:, :3], img1[:, :3], f0, f1),
             output_scale=self.block1.scale,
         )
 
@@ -295,7 +294,7 @@ class IFNet(nn.Module):
 
         # --- Block 1 ---
         fd, mask, feat = self.block1(
-            (torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1), 1),),
+            (warped_img0[:, :3], warped_img1[:, :3], wf0, wf1),
             native_scale_inputs=(mask, feat),
             trailing_inputs=(flow,),
             output_scale=self.block2.scale,
@@ -309,7 +308,7 @@ class IFNet(nn.Module):
 
         # --- Block 2 ---
         fd, mask, feat = self.block2(
-            (torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1), 1),),
+            (warped_img0[:, :3], warped_img1[:, :3], wf0, wf1),
             native_scale_inputs=(mask, feat),
             trailing_inputs=(flow,),
             output_scale=self.block3.scale,
@@ -323,7 +322,7 @@ class IFNet(nn.Module):
 
         # --- Block 3 ---
         fd, mask, feat = self.block3(
-            (torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1), 1),),
+            (warped_img0[:, :3], warped_img1[:, :3], wf0, wf1),
             native_scale_inputs=(mask, feat),
             trailing_inputs=(flow,),
             output_scale=self.block4.scale,
@@ -337,7 +336,7 @@ class IFNet(nn.Module):
 
         # --- Block 4 ---
         fd, mask, feat = self.block4(
-            (torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1), 1),),
+            (warped_img0[:, :3], warped_img1[:, :3], wf0, wf1),
             native_scale_inputs=(mask, feat),
             trailing_inputs=(flow,),
         )
