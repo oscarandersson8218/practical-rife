@@ -6,12 +6,19 @@ from train_log.IFNet_helpers import (
     TimestepFold,
     fold_scale_state_dict,
     fold_timestep_state_dict,
-    fold_warp_normalization_state_dict,
     prune_lastconv_state_dict,
 )
 # from train_log.refine import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def normalized_flows(flow):
+    """Normalize pixel-unit XY flow only at the sampling boundary."""
+    normalization = flow.new_tensor((
+        2.0 / (flow.shape[3] - 1.0),
+        2.0 / (flow.shape[2] - 1.0),
+    )).view(1, 2, 1, 1)
+    return flow[:, :2] * normalization, flow[:, 2:4] * normalization
 
 def warp(tenInput, tenFlow):
     tenHorizontal = torch.linspace(-1.0, 1.0, tenFlow.shape[3], device=device).view(
@@ -210,7 +217,7 @@ class ResConv(nn.Module):
         return self.relu(self.conv(x))
 
 class IFBlock(nn.Module):
-    _version = 3
+    _version = 2
 
     timestep_fold = TimestepFold.TIMESTEP_CONCAT
     fixed_timestep = 0.5
@@ -232,8 +239,6 @@ class IFBlock(nn.Module):
         self._timestep_scale = scale
         self._timestep_input_height = 768
         self._timestep_input_width = 384
-        self._flow_input_height = 768
-        self._flow_input_width = 384
         self.conv0 = nn.Sequential(
             conv(in_planes, c//2, 3, 2, 1),
             conv(c//2, c, 3, 2, 1),
@@ -276,10 +281,8 @@ class IFBlock(nn.Module):
         if not self.output_feat:
             prune_lastconv_state_dict(self, state_dict, prefix)
         version = local_metadata.get("version")
-        if version is None or version < 2:
-            fold_scale_state_dict(self, state_dict, prefix)
         if version is None or version < self._version:
-            fold_warp_normalization_state_dict(self, state_dict, prefix)
+            fold_scale_state_dict(self, state_dict, prefix)
         super()._load_from_state_dict(
             state_dict,
             prefix,
@@ -384,10 +387,11 @@ class IFNet(nn.Module):
             output_scale=self.block1.scale,
         )
 
-        warped_img0 = warp_downsample_for_scale(img0, flow[:, :2], self.block1.scale)
-        warped_img1 = warp_downsample_for_scale(img1, flow[:, 2:4], self.block1.scale)
-        wf0 = warp_downsample_for_scale(f0, flow[:, :2], self.block1.scale)
-        wf1 = warp_downsample_for_scale(f1, flow[:, 2:4], self.block1.scale)
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp_downsample_for_scale(img0, flow0, self.block1.scale)
+        warped_img1 = warp_downsample_for_scale(img1, flow1, self.block1.scale)
+        wf0 = warp_downsample_for_scale(f0, flow0, self.block1.scale)
+        wf1 = warp_downsample_for_scale(f1, flow1, self.block1.scale)
 
         # --- Block 1 ---
         fd, mask, feat = self.block1(
@@ -400,10 +404,11 @@ class IFNet(nn.Module):
         )
         flow = flow + fd
 
-        warped_img0 = warp_downsample_for_scale(img0, flow[:, :2], self.block2.scale)
-        warped_img1 = warp_downsample_for_scale(img1, flow[:, 2:4], self.block2.scale)
-        wf0 = warp_downsample_for_scale(f0, flow[:, :2], self.block2.scale)
-        wf1 = warp_downsample_for_scale(f1, flow[:, 2:4], self.block2.scale)
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp_downsample_for_scale(img0, flow0, self.block2.scale)
+        warped_img1 = warp_downsample_for_scale(img1, flow1, self.block2.scale)
+        wf0 = warp_downsample_for_scale(f0, flow0, self.block2.scale)
+        wf1 = warp_downsample_for_scale(f1, flow1, self.block2.scale)
 
         # --- Block 2 ---
         fd, mask, feat = self.block2(
@@ -416,10 +421,11 @@ class IFNet(nn.Module):
         )
         flow = flow + fd
 
-        warped_img0 = warp_downsample_for_scale(img0, flow[:, :2], self.block3.scale)
-        warped_img1 = warp_downsample_for_scale(img1, flow[:, 2:4], self.block3.scale)
-        wf0 = warp_downsample_for_scale(f0, flow[:, :2], self.block3.scale)
-        wf1 = warp_downsample_for_scale(f1, flow[:, 2:4], self.block3.scale)
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp_downsample_for_scale(img0, flow0, self.block3.scale)
+        warped_img1 = warp_downsample_for_scale(img1, flow1, self.block3.scale)
+        wf0 = warp_downsample_for_scale(f0, flow0, self.block3.scale)
+        wf1 = warp_downsample_for_scale(f1, flow1, self.block3.scale)
 
         # --- Block 3 ---
         fd, mask, feat = self.block3(
@@ -432,10 +438,11 @@ class IFNet(nn.Module):
         )
         flow = flow + fd
 
-        warped_img0 = warp(img0, flow[:, :2])
-        warped_img1 = warp(img1, flow[:, 2:4])
-        wf0 = warp(f0, flow[:, :2])
-        wf1 = warp(f1, flow[:, 2:4])
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp(img0, flow0)
+        warped_img1 = warp(img1, flow1)
+        wf0 = warp(f0, flow0)
+        wf1 = warp(f1, flow1)
 
         # --- Block 4 ---
         fd, mask, feat = self.block4(
@@ -444,8 +451,9 @@ class IFNet(nn.Module):
             trailing_inputs=(flow,),
         )
         flow = flow + fd
-        warped_img0 = warp(img0, flow[:, :2])
-        warped_img1 = warp(img1, flow[:, 2:4])
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp(img0, flow0)
+        warped_img1 = warp(img1, flow1)
 
         # Linear interpolation between warped img0 and warped img1
         mask = torch.sigmoid(mask)
@@ -479,10 +487,11 @@ class IFNetTwoBlock(nn.Module):
             output_scale=self.block1.scale,
         )
 
-        warped_img0 = warp(img0, flow[:, :2])
-        warped_img1 = warp(img1, flow[:, 2:4])
-        wf0 = warp(f0, flow[:, :2])
-        wf1 = warp(f1, flow[:, 2:4])
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp(img0, flow0)
+        warped_img1 = warp(img1, flow1)
+        wf0 = warp(f0, flow0)
+        wf1 = warp(f1, flow1)
 
         fd, mask, _ = self.block1(
             (warped_img0[:, :3], warped_img1[:, :3], wf0, wf1),
@@ -491,8 +500,9 @@ class IFNetTwoBlock(nn.Module):
         )
         flow = flow + fd
 
-        warped_img0 = warp(img0, flow[:, :2])
-        warped_img1 = warp(img1, flow[:, 2:4])
+        flow0, flow1 = normalized_flows(flow)
+        warped_img0 = warp(img0, flow0)
+        warped_img1 = warp(img1, flow1)
         mask = torch.sigmoid(mask)
         result = warped_img0 * mask + warped_img1 * (1 - mask)
         return None, None, [result]
